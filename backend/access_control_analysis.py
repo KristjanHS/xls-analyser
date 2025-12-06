@@ -13,12 +13,15 @@ import re
 from pathlib import Path
 from typing import Any, cast
 
+import numpy as np
+from matplotlib import colormaps, colors
 import matplotlib.pyplot as plt
 import pandas as pd
 
 DataFrame = pd.DataFrame
 
 logger = logging.getLogger(__name__)
+CHART_START_DATE = pd.Timestamp("2025-10-01")
 
 
 def load_excel_files(folder_path: Path) -> dict[str, pd.DataFrame]:
@@ -486,6 +489,13 @@ def calculate_reentries(presence_df: pd.DataFrame) -> pd.DataFrame:
     return grouped
 
 
+def _filter_on_or_after_date(df: pd.DataFrame, start_date: pd.Timestamp) -> pd.DataFrame:
+    if df.empty:
+        return df
+    dates = pd.to_datetime(df["date"])
+    return df.loc[dates >= start_date]
+
+
 def create_heatmap(hourly_agg: pd.DataFrame, output_path: Path) -> None:
     """Create a heatmap of presence by hour and floor/wing.
 
@@ -512,20 +522,29 @@ def create_heatmap(hourly_agg: pd.DataFrame, output_path: Path) -> None:
         aggfunc="sum",
     )
 
-    # Ensure all hours 0-23 are present
-    for hour in range(24):
+    # Ensure all hours from 07 onward are present and drop earlier empty hours
+    for hour in range(7, 24):
         if hour not in heatmap_matrix.columns:
             heatmap_matrix[hour] = 0
 
-    heatmap_matrix = heatmap_matrix.sort_index(axis=1)
+    hour_columns = [hour for hour in sorted(heatmap_matrix.columns) if hour >= 7]
+    heatmap_matrix = heatmap_matrix[hour_columns or list(heatmap_matrix.columns)]
+
+    max_minutes = float(heatmap_matrix.values.max()) if heatmap_matrix.size else 0.0
+    base_cmap = colormaps.get_cmap("YlOrRd").resampled(256)
+    cmap_colors = base_cmap(np.linspace(0, 1, base_cmap.N))
+    cmap_colors[0] = [1, 1, 1, 1]
+    heatmap_cmap = colors.ListedColormap(cmap_colors)
+    norm = colors.Normalize(vmin=0, vmax=max_minutes or 1)
 
     # Create heatmap
     fig, ax = plt.subplots(figsize=(14, max(6, len(heatmap_matrix) * 0.4)))
-    im = ax.imshow(heatmap_matrix.values, cmap="YlOrRd", aspect="auto")
+    im = ax.imshow(heatmap_matrix.values, cmap=heatmap_cmap, aspect="auto", norm=norm)
 
     # Set ticks and labels
-    ax.set_xticks(range(24))
-    ax.set_xticklabels([str(hour) for hour in range(24)])
+    hour_labels = list(heatmap_matrix.columns)
+    ax.set_xticks(range(len(hour_labels)))
+    ax.set_xticklabels([f"{hour:02d}" for hour in hour_labels])
     ax.set_yticks(range(len(heatmap_matrix)))
     ax.set_yticklabels(heatmap_matrix.index)
 
@@ -555,6 +574,14 @@ def create_team_comparison_charts(presence_df: pd.DataFrame, output_dir: Path) -
         logger.warning("No data to create team comparison charts")
         return
 
+    filtered_presence = _filter_on_or_after_date(presence_df, CHART_START_DATE)
+    if filtered_presence.empty:
+        logger.warning(
+            "No data on or after %s for team comparison charts; falling back to full dataset",
+            CHART_START_DATE.date(),
+        )
+        filtered_presence = presence_df.copy()
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Chart 1: Total minutes per floor (grouped by team)
@@ -563,24 +590,24 @@ def create_team_comparison_charts(presence_df: pd.DataFrame, output_dir: Path) -
     )
 
     floors = sorted(floor_team_data["floor"].unique())
-    teams = sorted(floor_team_data["cleaner_team"].unique())
+    teams_for_floor = sorted(floor_team_data["cleaner_team"].unique())
 
     fig, ax = plt.subplots(figsize=(12, 6))
     x = range(len(floors))
-    width = 0.8 / len(teams)
+    width_floor = 0.8 / len(teams_for_floor) if teams_for_floor else 0.8
 
-    for i, team in enumerate(teams):
+    for i, team in enumerate(teams_for_floor):
         team_data = floor_team_data[floor_team_data["cleaner_team"] == team]
         values = [
             team_data[team_data["floor"] == floor]["total_minutes"].sum() if floor in team_data["floor"].values else 0
             for floor in floors
         ]
-        ax.bar([pos + i * width for pos in x], values, width, label=team)
+        ax.bar([pos + i * width_floor for pos in x], values, width_floor, label=team)
 
     ax.set_xlabel("Floor")
     ax.set_ylabel("Total Minutes")
     ax.set_title("Total Minutes Present per Floor by Cleaner Team")
-    ax.set_xticks([pos + width * len(teams) / 2 for pos in x])
+    ax.set_xticks([pos + width_floor * len(teams_for_floor) / 2 for pos in x])
     ax.set_xticklabels(floors)
     ax.legend()
     plt.tight_layout()
@@ -591,28 +618,29 @@ def create_team_comparison_charts(presence_df: pd.DataFrame, output_dir: Path) -
     logger.info("Saved team comparison by floor to %s", output_path)
 
     # Chart 2: Total minutes per day (grouped by team)
-    daily_team_data = presence_df.groupby(["date", "cleaner_team"], as_index=False).agg(
+    daily_team_data = filtered_presence.groupby(["date", "cleaner_team"], as_index=False).agg(
         total_minutes=("duration_minutes", "sum")
     )
 
     dates = sorted(daily_team_data["date"].unique())
+    teams_for_daily = sorted(daily_team_data["cleaner_team"].unique())
 
     fig, ax = plt.subplots(figsize=(14, 6))
     x = range(len(dates))
-    width = 0.8 / len(teams)
+    width_daily = 0.8 / len(teams_for_daily) if teams_for_daily else 0.8
 
-    for i, team in enumerate(teams):
+    for i, team in enumerate(teams_for_daily):
         team_data = daily_team_data[daily_team_data["cleaner_team"] == team]
         values = [
             team_data[team_data["date"] == date]["total_minutes"].sum() if date in team_data["date"].values else 0
             for date in dates
         ]
-        ax.bar([pos + i * width for pos in x], values, width, label=team)
+        ax.bar([pos + i * width_daily for pos in x], values, width_daily, label=team)
 
     ax.set_xlabel("Date")
     ax.set_ylabel("Total Minutes")
     ax.set_title("Total Minutes Present per Day by Cleaner Team")
-    ax.set_xticks([pos + width * len(teams) / 2 for pos in x])
+    ax.set_xticks([pos + width_daily * len(teams_for_daily) / 2 for pos in x])
     ax.set_xticklabels([str(d) for d in dates], rotation=45, ha="right", fontsize=8)
     ax.tick_params(axis="x", labelsize=8)
     ax.legend()
@@ -642,6 +670,20 @@ def create_floor_stacked_charts(presence_df: pd.DataFrame, output_dir: Path) -> 
 
     for floor in floors:
         floor_data = presence_df[presence_df["floor"] == floor]
+        if floor in (0, 1):
+            filtered_floor_data = _filter_on_or_after_date(floor_data, CHART_START_DATE)
+            if filtered_floor_data.empty and not floor_data.empty:
+                logger.info(
+                    "No data on or after %s for floor %s stacked chart; using full floor dataset",
+                    CHART_START_DATE.date(),
+                    floor,
+                )
+            else:
+                floor_data = filtered_floor_data
+
+        if floor_data.empty:
+            logger.info("Skipping floor %s stacked chart; no data available after applying date filter", floor)
+            continue
 
         daily_floor_data = floor_data.groupby(["date", "cleaner_team"], as_index=False).agg(
             total_minutes=("duration_minutes", "sum")

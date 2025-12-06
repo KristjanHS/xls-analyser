@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 from datetime import datetime
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -56,6 +57,22 @@ def save_dataframe(df: pd.DataFrame, output_dir: Path, base_name: str) -> None:
     df.to_excel(xlsx_path, index=False, engine="openpyxl")
 
     logger.info("Saved %s (%d rows) to CSV and Excel", base_name, len(df))
+
+
+def update_latest_symlink(output_base: Path, run_dir: Path) -> None:
+    """Point UserData/Latest to the newest run directory."""
+    latest_link = output_base.parent / "Latest"
+    target_rel = Path(os.path.relpath(run_dir, latest_link.parent))
+
+    if latest_link.exists() or latest_link.is_symlink():
+        if latest_link.is_symlink() or latest_link.is_file():
+            latest_link.unlink()
+        elif latest_link.is_dir():
+            logger.warning("Latest path exists as a directory; leaving untouched: %s", latest_link)
+            return
+
+    latest_link.symlink_to(target_rel)
+    logger.info("Updated Latest symlink: %s -> %s", latest_link, target_rel)
 
 
 def main() -> int:
@@ -208,6 +225,8 @@ def main() -> int:
         logger.info("")
         logger.info("All outputs saved to: %s", run_dir)
         logger.info("=" * 80)
+
+        update_latest_symlink(args.output, run_dir)
 
         return 0
 

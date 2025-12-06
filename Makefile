@@ -3,6 +3,8 @@
 .PHONY: help
 # Setup
 .PHONY: setup-hooks setup-uv export-reqs install-act setup-act new-project-bootstrap new-project-cleanup new-project-post new-project-git-setup
+# Analysis
+.PHONY: analyze
 # Lint / Type Check
 .PHONY: ruff-format ruff-fix yamlfmt pyright pre-commit
 # Tests
@@ -20,6 +22,8 @@ SHELL := /usr/bin/bash
 
 # Stable project/session handling
 LOG_DIR := logs
+INPUT ?= UserData
+OUTPUT ?= UserData/results
 
 # Configurable pyright config path (default to repo config)
 PYRIGHT_CONFIG ?= ./pyrightconfig.json
@@ -35,6 +39,9 @@ help:
 	@echo "  export-reqs        - Export requirements.txt from uv.lock"
 	@echo "  install-act        - Install Act CLI for local CI runs"
 	@echo "  setup-act          - Install and verify Act + Docker setup"
+	@echo ""
+	@echo "  -- Analysis --"
+	@echo "  analyze            - Run access control pipeline (.venv, verbose); override INPUT/OUTPUT"
 	@echo ""
 	@echo "  -- Lint & Type Check --"
 	@echo "  ruff-format        - Auto-format code with Ruff"
@@ -139,6 +146,14 @@ setup-act: install-act
 	@echo "  act -l                                    # List all workflows"
 	@echo "  act -W .github/workflows/python-lint-test.yml -j unit_tests"
 	@echo "  make pre-push                              # Run with all checks enabled"
+
+analyze:
+	@if [ ! -x .venv/bin/python ]; then \
+		echo "Missing .venv/bin/python. Run ./run_uv.sh first."; \
+		exit 1; \
+	fi
+	@echo ">> Running access control analysis (input=$(INPUT), output=$(OUTPUT))"
+	.venv/bin/python scripts/analyze_access_logs.py --input $(INPUT) --output $(OUTPUT) -v
 
 # Run local integration tests; prefer uv if available
 integration:

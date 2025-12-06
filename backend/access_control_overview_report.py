@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 import logging
 from html import escape
+import re
 from pathlib import Path
 from typing import Iterable, cast
 
@@ -26,7 +27,7 @@ def generate_access_control_overview(
     input_dir: Path,
     output_dir: Path,
 ) -> tuple[Path, Path]:
-    """Build the iteration-1 Ops Snapshot HTML and PDF."""
+    """Build the Ops Snapshot HTML and PDF (Iteration 2)."""
     reports_dir.mkdir(parents=True, exist_ok=True)
     run_timestamp = datetime.now()
 
@@ -86,11 +87,21 @@ def _build_context(
         "reentry_hotspots": _reentry_hotspots(reentries_df),
     }
 
-    plots = [
+    core_plots: list[tuple[str, Path]] = [
         ("Hourly heatmap", plots_dir / "heatmap_hourly.png"),
         ("Team vs floor", plots_dir / "team_comparison_floor.png"),
         ("Team vs day", plots_dir / "team_comparison_daily.png"),
     ]
+
+    per_floor_plots = _discover_floor_plots(plots_dir)
+
+    plot_commentary = {
+        "Hourly heatmap": _commentary_heatmap(hourly_agg),
+        "Team vs floor": _commentary_team_floor(presence_intervals_df),
+        "Team vs day": _commentary_team_day(presence_intervals_df),
+    }
+
+    floor_commentary = {floor: _commentary_floor(presence_intervals_df, floor) for floor, _ in per_floor_plots}
 
     return {
         "run_timestamp": run_timestamp,
@@ -103,7 +114,11 @@ def _build_context(
         "floors": floors,
         "date_range": date_range,
         "highlights": highlights,
-        "plots": plots,
+        "plots": core_plots,
+        "per_floor_plots": per_floor_plots,
+        "plot_commentary": plot_commentary,
+        "floor_commentary": floor_commentary,
+        "csv_links": _csv_links(output_dir),
     }
 
 
@@ -119,6 +134,10 @@ def _render_html(context: dict[str, object]) -> str:
     date_range: tuple[str, str] | None = context["date_range"]  # type: ignore[assignment]
     highlights: dict[str, list[str]] = context["highlights"]  # type: ignore[assignment]
     plots: list[tuple[str, Path]] = context["plots"]  # type: ignore[assignment]
+    per_floor_plots: list[tuple[int, Path]] = context["per_floor_plots"]  # type: ignore[assignment]
+    plot_commentary: dict[str, list[str]] = context["plot_commentary"]  # type: ignore[assignment]
+    floor_commentary: dict[int, list[str]] = context["floor_commentary"]  # type: ignore[assignment]
+    csv_links: list[tuple[str, Path, bool]] = context["csv_links"]  # type: ignore[assignment]
 
     date_range_text = f"{date_range[0]} to {date_range[1]}" if date_range else "N/A"
     teams_text = f"{len(teams)} ({', '.join(teams)})" if teams else "0"
@@ -134,7 +153,26 @@ def _render_html(context: dict[str, object]) -> str:
         ]
     )
 
-    plots_html = "".join(_render_plot(title, path) for title, path in plots)
+    plots_html = "".join(
+        _render_plot_block(title, path, plot_commentary.get(title, _default_commentary())) for title, path in plots
+    )
+
+    floor_list_text = ", ".join(str(floor) for floor, _ in per_floor_plots) if per_floor_plots else "None"
+
+    floor_plots_html = (
+        "".join(
+            _render_plot_block(
+                f"Floor {floor} — stacked team minutes",
+                path,
+                floor_commentary.get(floor, _default_commentary()),
+            )
+            for floor, path in per_floor_plots
+        )
+        if per_floor_plots
+        else '<p class="missing">No per-floor stacked charts found.</p>'
+    )
+
+    csv_links_html = _render_links(csv_links)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -204,6 +242,29 @@ def _render_html(context: dict[str, object]) -> str:
       font-size: 14px;
       color: #4a5568;
     }}
+    .plot-block {{
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      margin-bottom: 24px;
+    }}
+    .plot-notes {{
+      background: #f1f5f9;
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      padding: 12px;
+    }}
+    .plot-notes h3 {{
+      margin-top: 0;
+      margin-bottom: 8px;
+    }}
+    .commentary {{
+      margin: 0;
+      padding-left: 18px;
+    }}
+    .commentary li {{
+      margin-bottom: 6px;
+    }}
     .missing {{
       color: #b45309;
       font-style: italic;
@@ -213,6 +274,22 @@ def _render_html(context: dict[str, object]) -> str:
       padding-left: 12px;
       margin-top: 8px;
       background: #ecfeff;
+    }}
+    .link-list {{
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }}
+    .link-list li {{
+      margin-bottom: 6px;
+    }}
+    @media print {{
+      body {{
+        margin: 24px;
+      }}
+      .plot-block {{
+        display: block;
+      }}
     }}
   </style>
 </head>
@@ -249,11 +326,18 @@ def _render_html(context: dict[str, object]) -> str:
   <h2>Visuals</h2>
   {plots_html}
 
+  <h2>Per-floor stacked charts</h2>
+  <p><strong>Floors present:</strong> {escape(floor_list_text)}</p>
+  {floor_plots_html}
+
+  <h2>Key CSV outputs</h2>
+  {csv_links_html}
+
   <h2>Data quality note</h2>
   <p class="data-quality">
-    Thresholds per access_control_data_quality.md: missing wings are expected (no warning). Warn if missing names reach
-    10+ per run or if timestamp parse failures reach 10+. Update warnings in the data quality log when these thresholds
-    are crossed.
+    Thresholds per access_control_confidence_plan.md: missing wings are expected (no warning). Warn if missing names
+    reach 10+ per run or if timestamp parse failures reach 10+. Update warnings in the confidence plan log when these
+    thresholds are crossed.
   </p>
 </body>
 </html>
@@ -284,14 +368,62 @@ def _render_plot(title: str, path: Path) -> str:
     safe_title = escape(title)
     if not path.exists():
         return f"""
-    <p class="missing">{safe_title}: plot not found at {escape(str(path))}</p>
+    <div class="plot-media">
+      <p class="missing">{safe_title}: plot not found at {escape(str(path))}</p>
+    </div>
     """
 
     return f"""
-    <figure>
-      <img src="{escape(path.name)}" alt="{safe_title}" />
-      <figcaption>{safe_title}</figcaption>
-    </figure>
+    <div class="plot-media">
+      <figure>
+        <img src="{escape(path.name)}" alt="{safe_title}" />
+        <figcaption>{safe_title}</figcaption>
+      </figure>
+    </div>
+    """
+
+
+def _render_plot_block(title: str, path: Path, commentary: list[str]) -> str:
+    commentary_html = _render_commentary(title, commentary)
+    plot_html = _render_plot(title, path)
+    return f"""
+  <section class="plot-block">
+    {plot_html}
+    {commentary_html}
+  </section>
+    """
+
+
+def _render_commentary(title: str, commentary: list[str]) -> str:
+    safe_title = escape(title)
+    bullets = commentary if commentary else _default_commentary()
+    bullet_items = "".join(f"<li>{escape(item)}</li>" for item in bullets)
+    return f"""
+    <div class="plot-notes">
+      <h3>{safe_title} commentary</h3>
+      <ul class="commentary">
+        {bullet_items}
+      </ul>
+    </div>
+    """
+
+
+def _render_links(links: list[tuple[str, Path, bool]]) -> str:
+    if not links:
+        return '<p class="missing">No CSV outputs detected.</p>'
+
+    items = []
+    for label, path, exists in links:
+        safe_label = escape(label)
+        if exists:
+            items.append(f'<li><a href="{escape(path.name)}">{safe_label}</a></li>')
+        else:
+            items.append(f'<li class="missing">{safe_label}: missing at {escape(str(path))}</li>')
+    items_html = "\n".join(items)
+    return f"""
+  <ul class="link-list">
+    {items_html}
+  </ul>
     """
 
 
@@ -387,3 +519,152 @@ def _format_floor_wing(floor: float | int | str | None, wing: float | int | str 
 
 def _format_number(value: float | int) -> str:
     return f"{value:,.0f}"
+
+
+def _discover_floor_plots(plots_dir: Path) -> list[tuple[int, Path]]:
+    """Find per-floor stacked charts generated by the pipeline."""
+    if not plots_dir.exists():
+        return []
+
+    pattern = re.compile(r"^floor_(\d+)_stacked\.png$")
+    found: list[tuple[int, Path]] = []
+    for entry in plots_dir.iterdir():
+        if not entry.is_file():
+            continue
+        match = pattern.match(entry.name)
+        if match:
+            found.append((int(match.group(1)), entry))
+
+    return sorted(found, key=lambda item: item[0])
+
+
+def _default_commentary() -> list[str]:
+    return [
+        "Summary — data not available yet for this plot.",
+        "Reflection — rerun the pipeline or refresh the inputs to populate this view.",
+        "Data quality — ensure source CSVs parsed and plots are written alongside the report.",
+    ]
+
+
+def _commentary_heatmap(hourly_agg: pd.DataFrame, limit: int = 3) -> list[str]:
+    if hourly_agg.empty:
+        return _default_commentary()
+
+    hour_totals = (
+        hourly_agg.groupby("hour", as_index=False)["minutes_present"]
+        .sum()
+        .reset_index()
+        .sort_values(by="minutes_present", ascending=False)
+    )
+    top_hours = hour_totals.head(limit)
+    top_hours_text = ", ".join(
+        f"{int(row['hour']):02d}:00 ({_format_number(row['minutes_present'])} min)" for _, row in top_hours.iterrows()
+    )
+
+    floor_totals = (
+        hourly_agg.groupby("floor", as_index=False)["minutes_present"]
+        .sum()
+        .reset_index()
+        .sort_values(by="minutes_present", ascending=False)
+    )
+    top_floor = floor_totals.iloc[0] if not floor_totals.empty else None
+    top_floor_text = (
+        f"Floor {int(top_floor['floor'])} leading with {_format_number(top_floor['minutes_present'])} minutes"
+        if top_floor is not None
+        else "No floor activity logged"
+    )
+
+    missing_floors = int(hourly_agg["floor"].isna().sum())
+
+    return [
+        f"Summary — peak activity hours: {top_hours_text}; {top_floor_text}.",
+        "Reflection — use peaks to align staffing; confirm off-peak coverage is intentional.",
+        f"Data quality — {missing_floors} rows missing floor labels; wings may be blank by design.",
+    ]
+
+
+def _commentary_team_floor(presence_intervals_df: pd.DataFrame, limit: int = 3) -> list[str]:
+    if presence_intervals_df.empty:
+        return _default_commentary()
+
+    grouped = (
+        presence_intervals_df.groupby(["floor", "cleaner_team"], as_index=False)["duration_minutes"]
+        .sum()
+        .reset_index()
+        .sort_values(by="duration_minutes", ascending=False)
+    )
+    top_pairs = grouped.head(limit)
+    top_pairs_text = ", ".join(
+        f"Floor {int(row['floor'])} — {row['cleaner_team']} ({_format_number(row['duration_minutes'])} min)"
+        for _, row in top_pairs.iterrows()
+    )
+
+    floor_spread = presence_intervals_df.groupby("floor")["cleaner_team"].nunique()
+    multi_team_floors = int((floor_spread > 1).sum())
+
+    return [
+        f"Summary — top team/floor combinations: {top_pairs_text}.",
+        "Reflection — rebalance if one team dominates multiple floors or a floor lacks backups.",
+        f"Data quality — {multi_team_floors} floors have multiple teams; verify floor labels are consistent.",
+    ]
+
+
+def _commentary_team_day(presence_intervals_df: pd.DataFrame, limit: int = 3) -> list[str]:
+    if presence_intervals_df.empty:
+        return _default_commentary()
+
+    daily_totals = (
+        presence_intervals_df.groupby("date", as_index=False)["duration_minutes"]
+        .sum()
+        .reset_index()
+        .sort_values(by="duration_minutes", ascending=False)
+    )
+    top_days = daily_totals.head(limit)
+    top_days_text = ", ".join(
+        f"{row['date']} ({_format_number(row['duration_minutes'])} min)" for _, row in top_days.iterrows()
+    )
+
+    team_days = presence_intervals_df.groupby("date")["cleaner_team"].nunique()
+    single_team_days = int((team_days == 1).sum())
+
+    return [
+        f"Summary — busiest days: {top_days_text}.",
+        "Reflection — align supplies/coverage to match busiest days; spot-check quieter days for missed scans.",
+        f"Data quality — {single_team_days} days show only one team; confirm logging across teams is complete.",
+    ]
+
+
+def _commentary_floor(presence_intervals_df: pd.DataFrame, floor: int, limit: int = 2) -> list[str]:
+    floor_df = presence_intervals_df[presence_intervals_df["floor"] == floor]
+    if floor_df.empty:
+        return _default_commentary()
+
+    team_totals = (
+        floor_df.groupby("cleaner_team", as_index=False)["duration_minutes"]
+        .sum()
+        .reset_index()
+        .sort_values(by="duration_minutes", ascending=False)
+    )
+    top_teams = team_totals.head(limit)
+    teams_text = ", ".join(
+        f"{row['cleaner_team']} ({_format_number(row['duration_minutes'])} min)" for _, row in top_teams.iterrows()
+    )
+
+    day_span = floor_df["date"].nunique()
+    missing_wings = int(floor_df["wing"].isna().sum())
+
+    return [
+        f"Summary — top teams on floor {floor}: {teams_text}.",
+        f"Reflection — coverage spans {day_span} days; consider rotation if one team is over-weighted.",
+        f"Data quality — {missing_wings} intervals missing wing; blanks are expected when wings are not specified.",
+    ]
+
+
+def _csv_links(output_dir: Path) -> list[tuple[str, Path, bool]]:
+    candidates = [
+        ("Hourly by floor/wing/team", output_dir / "hourly_floor_wing.csv"),
+        ("Daily by floor/wing", output_dir / "daily_floor_wing.csv"),
+        ("Per-team by floor/wing", output_dir / "team_floor_wing.csv"),
+        ("Re-entries", output_dir / "reentries.csv"),
+    ]
+    return [(label, path, path.exists()) for label, path in candidates]
