@@ -522,12 +522,12 @@ def create_heatmap(hourly_agg: pd.DataFrame, output_path: Path) -> None:
         aggfunc="sum",
     )
 
-    # Ensure all hours from 07 onward are present and drop earlier empty hours
-    for hour in range(7, 24):
+    # Ensure all hours 0-23 are present
+    for hour in range(24):
         if hour not in heatmap_matrix.columns:
             heatmap_matrix[hour] = 0
 
-    hour_columns = [hour for hour in sorted(heatmap_matrix.columns) if hour >= 7]
+    hour_columns = sorted(heatmap_matrix.columns)
     heatmap_matrix = heatmap_matrix[hour_columns or list(heatmap_matrix.columns)]
 
     max_minutes = float(heatmap_matrix.values.max()) if heatmap_matrix.size else 0.0

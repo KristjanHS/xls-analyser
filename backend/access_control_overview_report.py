@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 import logging
-from html import escape
 import re
+import os
+from datetime import datetime
+from html import escape
 from pathlib import Path
 from typing import Iterable, cast
 
@@ -50,8 +51,13 @@ def generate_access_control_overview(
     html_path.write_text(html_content, encoding="utf-8")
     logger.info("Saved HTML snapshot to %s", html_path)
 
-    HTML(string=html_content, base_url=str(reports_dir)).write_pdf(pdf_path)
-    logger.info("Exported PDF snapshot to %s", pdf_path)
+    original_cwd = os.getcwd()
+    try:
+        os.chdir(reports_dir)
+        HTML(string=html_content, base_url=".").write_pdf(pdf_path.name)
+        logger.info("Exported PDF snapshot to %s", pdf_path)
+    finally:
+        os.chdir(original_cwd)
 
     return html_path, pdf_path
 
