@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import logging
 import re
-import os
 from datetime import datetime
 from html import escape
 from pathlib import Path
 from typing import Iterable, cast
+from urllib.parse import urlparse
 
 import pandas as pd
-from weasyprint import HTML  # type: ignore[reportMissingTypeStubs]
+from weasyprint import HTML, default_url_fetcher  # type: ignore[reportMissingTypeStubs]
 
 logger = logging.getLogger(__name__)
 
@@ -51,13 +51,8 @@ def generate_access_control_overview(
     html_path.write_text(html_content, encoding="utf-8")
     logger.info("Saved HTML snapshot to %s", html_path)
 
-    original_cwd = os.getcwd()
-    try:
-        os.chdir(reports_dir)
-        HTML(string=html_content, base_url=".").write_pdf(pdf_path.name)
-        logger.info("Exported PDF snapshot to %s", pdf_path)
-    finally:
-        os.chdir(original_cwd)
+    _write_pdf_with_relative_links(html_content, reports_dir, pdf_path)
+    logger.info("Exported PDF snapshot to %s", pdf_path)
 
     return html_path, pdf_path
 
@@ -674,3 +669,48 @@ def _csv_links(output_dir: Path) -> list[tuple[str, Path, bool]]:
         ("Re-entries", output_dir / "reentries.csv"),
     ]
     return [(label, path, path.exists()) for label, path in candidates]
+
+
+def _write_pdf_with_relative_links(html_content: str, base_dir: Path, pdf_path: Path) -> None:
+    """Render PDF and strip absolute file:// links back to relative paths."""
+    url_fetcher = _relative_url_fetcher(base_dir)
+    doc = HTML(string=html_content, base_url=str(base_dir), url_fetcher=url_fetcher).render()
+    _rewrite_links_to_relative(doc, base_dir)
+    doc.write_pdf(str(pdf_path))
+
+
+def _rewrite_links_to_relative(doc, base_dir: Path) -> None:
+    for page in doc.pages:
+        updated_links = []
+        for link in page.links:
+            kind, target, rect, element = link
+            if kind != "external":
+                updated_links.append(link)
+                continue
+            parsed = urlparse(target)
+            if parsed.scheme != "file":
+                updated_links.append(link)
+                continue
+            target_path = Path(parsed.path)
+            try:
+                relative_target = target_path.relative_to(base_dir.resolve())
+                target = relative_target.as_posix()
+            except ValueError:
+                # Link points outside base_dir; leave untouched
+                pass
+            updated_links.append((kind, target, rect, element))
+        page.links[:] = updated_links
+
+
+def _relative_url_fetcher(base_dir: Path):
+    def fetch(url: str) -> dict[str, object]:
+        parsed = urlparse(url)
+        if parsed.scheme:
+            return default_url_fetcher(url)
+
+        target = Path(url)
+        if not target.is_absolute():
+            target = (base_dir / target).resolve()
+        return default_url_fetcher(target.as_uri())
+
+    return fetch
