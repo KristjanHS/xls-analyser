@@ -140,13 +140,13 @@ All outputs saved to `UserData/results/`
 
 **Pipeline Steps:**
 1. Load all Excel files from input folder
-2. Normalize events → save `normalized_events.csv` + `.xlsx`
-3. Build presence intervals → save `presence_intervals.csv` + `.xlsx`
+2. Normalize events → save `normalized_events.xlsx`
+3. Build presence intervals → save `presence_intervals.xlsx`
 4. Generate aggregations → save:
-   - `hourly_floor_wing.csv`
-   - `daily_floor_wing.csv`
-   - `team_floor_wing.csv`
-   - `reentries.csv`
+   - `hourly_floor_wing.xlsx`
+   - `daily_floor_wing.xlsx`
+   - `team_floor_wing.xlsx`
+   - `reentries.xlsx`
 5. Generate visualizations → save to `plots/`:
    - `heatmap_hourly.png`
    - `team_comparison_floor.png`
@@ -210,14 +210,12 @@ All outputs saved to `UserData/results/`
 
 ```
 UserData/results/
-├── normalized_events.csv          # All events from 8 files
-├── normalized_events.xlsx         # Excel format
-├── presence_intervals.csv         # Computed presence intervals
-├── presence_intervals.xlsx
-├── hourly_floor_wing.csv          # Aggregation: hour × floor × wing × team
-├── daily_floor_wing.csv           # Aggregation: date × floor × wing
-├── team_floor_wing.csv            # Aggregation: date × team × floor × wing
-├── reentries.csv                  # Re-entry analysis
+├── normalized_events.xlsx         # All events from 8 files
+├── presence_intervals.xlsx        # Computed presence intervals
+├── hourly_floor_wing.xlsx         # Aggregation: hour × floor × wing × team
+├── daily_floor_wing.xlsx          # Aggregation: date × floor × wing
+├── team_floor_wing.xlsx           # Aggregation: date × team × floor × wing
+├── reentries.xlsx                 # Re-entry analysis
 └── plots/
     ├── heatmap_hourly.png         # Heatmap: hours vs floors/wings
     ├── team_comparison_floor.png  # Bar chart: teams × floors
@@ -337,4 +335,3 @@ uv sync --group test  # Also installs pytest and test tools
 
 **Last Updated:** 2025-12-06  
 **Status:** Implementation complete, ready for real data execution
-

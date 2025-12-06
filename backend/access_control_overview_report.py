@@ -119,7 +119,7 @@ def _build_context(
         "per_floor_plots": per_floor_plots,
         "plot_commentary": plot_commentary,
         "floor_commentary": floor_commentary,
-        "csv_links": _csv_links(output_dir),
+        "xlsx_links": _xlsx_links(output_dir),
     }
 
 
@@ -138,7 +138,7 @@ def _render_html(context: dict[str, object]) -> str:
     per_floor_plots: list[tuple[int, Path]] = context["per_floor_plots"]  # type: ignore[assignment]
     plot_commentary: dict[str, list[str]] = context["plot_commentary"]  # type: ignore[assignment]
     floor_commentary: dict[int, list[str]] = context["floor_commentary"]  # type: ignore[assignment]
-    csv_links: list[tuple[str, Path, bool]] = context["csv_links"]  # type: ignore[assignment]
+    xlsx_links: list[tuple[str, Path, bool]] = context["xlsx_links"]  # type: ignore[assignment]
 
     date_range_text = f"{date_range[0]} to {date_range[1]}" if date_range else "N/A"
     teams_text = f"{len(teams)} ({', '.join(teams)})" if teams else "0"
@@ -173,7 +173,7 @@ def _render_html(context: dict[str, object]) -> str:
         else '<p class="missing">No per-floor stacked charts found.</p>'
     )
 
-    csv_links_html = _render_links(csv_links)
+    excel_links_html = _render_links(xlsx_links)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -331,8 +331,8 @@ def _render_html(context: dict[str, object]) -> str:
   <p><strong>Floors present:</strong> {escape(floor_list_text)}</p>
   {floor_plots_html}
 
-  <h2>Key CSV outputs</h2>
-  {csv_links_html}
+  <h2>Key Excel outputs</h2>
+  {excel_links_html}
 
   <h2>Data quality note</h2>
   <p class="data-quality">
@@ -411,7 +411,7 @@ def _render_commentary(title: str, commentary: list[str]) -> str:
 
 def _render_links(links: list[tuple[str, Path, bool]]) -> str:
     if not links:
-        return '<p class="missing">No CSV outputs detected.</p>'
+        return '<p class="missing">No Excel outputs detected.</p>'
 
     items = []
     for label, path, exists in links:
@@ -543,7 +543,7 @@ def _default_commentary() -> list[str]:
     return [
         "Summary — data not available yet for this plot.",
         "Reflection — rerun the pipeline or refresh the inputs to populate this view.",
-        "Data quality — ensure source CSVs parsed and plots are written alongside the report.",
+        "Data quality — ensure source workbooks parsed and plots are written alongside the report.",
     ]
 
 
@@ -661,12 +661,12 @@ def _commentary_floor(presence_intervals_df: pd.DataFrame, floor: int, limit: in
     ]
 
 
-def _csv_links(output_dir: Path) -> list[tuple[str, Path, bool]]:
+def _xlsx_links(output_dir: Path) -> list[tuple[str, Path, bool]]:
     candidates = [
-        ("Hourly by floor/wing/team", output_dir / "hourly_floor_wing.csv"),
-        ("Daily by floor/wing", output_dir / "daily_floor_wing.csv"),
-        ("Per-team by floor/wing", output_dir / "team_floor_wing.csv"),
-        ("Re-entries", output_dir / "reentries.csv"),
+        ("Hourly by floor/wing/team", output_dir / "hourly_floor_wing.xlsx"),
+        ("Daily by floor/wing", output_dir / "daily_floor_wing.xlsx"),
+        ("Per-team by floor/wing", output_dir / "team_floor_wing.xlsx"),
+        ("Re-entries", output_dir / "reentries.xlsx"),
     ]
     return [(label, path, path.exists()) for label, path in candidates]
 

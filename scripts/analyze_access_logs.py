@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 
 def save_dataframe(df: pd.DataFrame, output_dir: Path, base_name: str) -> None:
-    """Save DataFrame as both CSV and Excel.
+    """Save DataFrame as Excel (.xlsx).
 
     Args:
         df: DataFrame to save
@@ -50,13 +50,11 @@ def save_dataframe(df: pd.DataFrame, output_dir: Path, base_name: str) -> None:
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    csv_path = output_dir / f"{base_name}.csv"
     xlsx_path = output_dir / f"{base_name}.xlsx"
 
-    df.to_csv(csv_path, index=False)
     df.to_excel(xlsx_path, index=False, engine="openpyxl")
 
-    logger.info("Saved %s (%d rows) to CSV and Excel", base_name, len(df))
+    logger.info("Saved %s (%d rows) to Excel (.xlsx)", base_name, len(df))
 
 
 def update_latest_symlink(output_base: Path, run_dir: Path) -> None:

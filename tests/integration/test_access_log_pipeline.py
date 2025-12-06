@@ -172,17 +172,17 @@ def test_full_pipeline(temp_excel_files: Path, tmp_path: Path) -> None:
     # Step 6: Save outputs
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    normalized_events_df.to_csv(output_dir / "normalized_events.csv", index=False)
-    presence_intervals_df.to_csv(output_dir / "presence_intervals.csv", index=False)
-    hourly_agg.to_csv(output_dir / "hourly_floor_wing.csv", index=False)
-    daily_agg.to_csv(output_dir / "daily_floor_wing.csv", index=False)
-    team_agg.to_csv(output_dir / "team_floor_wing.csv", index=False)
-    reentries_df.to_csv(output_dir / "reentries.csv", index=False)
+    normalized_events_df.to_excel(output_dir / "normalized_events.xlsx", index=False)
+    presence_intervals_df.to_excel(output_dir / "presence_intervals.xlsx", index=False)
+    hourly_agg.to_excel(output_dir / "hourly_floor_wing.xlsx", index=False)
+    daily_agg.to_excel(output_dir / "daily_floor_wing.xlsx", index=False)
+    team_agg.to_excel(output_dir / "team_floor_wing.xlsx", index=False)
+    reentries_df.to_excel(output_dir / "reentries.xlsx", index=False)
 
     # Verify files exist
-    assert (output_dir / "normalized_events.csv").exists()
-    assert (output_dir / "presence_intervals.csv").exists()
-    assert (output_dir / "hourly_floor_wing.csv").exists()
+    assert (output_dir / "normalized_events.xlsx").exists()
+    assert (output_dir / "presence_intervals.xlsx").exists()
+    assert (output_dir / "hourly_floor_wing.xlsx").exists()
 
     # Step 7: Create visualizations
     plots_dir = output_dir / "plots"
