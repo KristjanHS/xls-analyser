@@ -66,13 +66,13 @@ def normalize_events(raw_df: DataFrame, cleaner_team: str, source_file: str) -> 
     """
     # Column mapping based on user specification:
     # A = timestamp, C = event_type, H = door_name, AL = person_name (primary)
-    # Additional person name fallbacks: AJ, AG, AB, AF
-    # Excel columns: A=0, C=2, H=7, AB=27, AF=31, AG=32, AJ=35, AL=37
+    # Additional person name fallbacks: AN, AC, AJ, AG, AB, AF
+    # Excel columns: A=0, C=2, H=7, AB=27, AC=28, AF=31, AG=32, AJ=35, AL=37, AN=39
     col_timestamp = 0  # Column A
     col_event_type = 2  # Column C
     col_door_name = 7  # Column H
     col_person_name = 37  # Column AL
-    col_person_name_fallbacks = [35, 32, 27, 31]  # AJ, AG, AB, AF
+    col_person_name_fallbacks = [39, 28, 35, 32, 27, 31]  # AN, AC, AJ, AG, AB, AF
 
     # Get actual column names from DataFrame
     cols: list[Any] = raw_df.columns.tolist()
