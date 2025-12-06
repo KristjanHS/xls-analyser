@@ -1,0 +1,43 @@
+name: xls-analyser-dev
+
+##########################################################################
+# Development/Test Docker Compose
+#
+# Purpose: Run integration tests in containers
+# NOT for end users - see ../Dockerfile and ../scripts/transcribe-docker
+##########################################################################
+
+services:
+  # ---------- App Container (for testing) -----------------------------------------
+  app:
+    image: xls-analyser-dev
+    build:
+      context: ..
+      dockerfile: docker/app.Dockerfile
+      target: runtime
+      # Allow reproducible base images while keeping overrides simple.
+      # Defaults mirror the digest-pinned ARGs in the Dockerfile.
+      args:
+        UV_IMAGE_REF: ${UV_IMAGE_REF:-ghcr.io/astral-sh/uv:python3.14-bookworm-slim}
+        PYTHON_RUNTIME_IMAGE: ${PYTHON_RUNTIME_IMAGE:-python:3.14-slim-bookworm}
+    volumes:
+      - ../backend:/app/backend # Live backend code
+      - ../logs:/app/logs # Live log access
+      - ../tests:/app/tests # Mount tests for in-container testing
+      - ../scripts:/app/scripts # Shell helpers used by tests
+      - ../docker:/app/docker # Compose file presence checked by scripts
+      - ../reports:/app/reports # Persist test reports to host
+    working_dir: /app
+    # Start minimal keepalive for testing
+    command: ["python", "-m", "backend.main"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "backend.main", "--healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    environment:
+      - APP_LOG_DIR=/app/logs
+      - HF_HOME=/hf_cache
+      # For testing, we can set smaller models or mock mode
+      - LOG_LEVEL=INFO

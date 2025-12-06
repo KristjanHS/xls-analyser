@@ -1,0 +1,88 @@
+# Testing Approach
+
+A high-level guide to testing with clear separation between unit, integration, and E2E tests.
+
+## Quick Start
+
+```bash
+# Run by test level (folder-based organization)
+.venv/bin/python -m pytest tests/unit/         # Fast, isolated
+.venv/bin/python -m pytest tests/integration/  # Real models, mocked services
+.venv/bin/python -m pytest tests/e2e/          # End-to-end with real everything
+
+# Default run (unit + integration, skips E2E)
+.venv/bin/python -m pytest -v
+
+# Filter by characteristics (markers work across all folders)
+.venv/bin/python -m pytest -m "not slow"       # Skip slow tests
+.venv/bin/python -m pytest -m "not network"    # Offline mode
+.venv/bin/python -m pytest -m "not gpu"        # CPU-only
+```
+
+## Test Hierarchy
+
+| Test Level | Speed | Mocking Strategy | When to Use | Folder |
+|-----------|-------|------------------|-------------|--------|
+| **Unit** | Fast (<5s) | Mock everything external | Test single components in isolation | `tests/unit/` |
+| **Integration** | Medium (~30s) | Mock only external APIs/models | Test component interactions | `tests/integration/` |
+| **E2E** | Slow (minutes) | No mocks, real everything | Validate end-to-end workflows | `tests/e2e/` |
+
+## Core Principles
+
+1. **Test Isolation**: Each test runs independently without state leakage
+2. **Clear Boundaries**: Folder-based organization by test type with appropriate mocking
+3. **pytest-Native**: Prefer pytest features and fixtures over unittest patterns
+4. **DRY Fixtures**: Shared setup in hierarchical `conftest.py` files
+
+## Test Fixtures
+
+Fixtures are organized hierarchically through `conftest.py` files:
+- **Root** (`tests/conftest.py`): Available to all tests
+- **Unit** (`tests/unit/conftest.py`): Auto-blocks network, provides temp resources
+- **Integration** (`tests/integration/conftest.py`): GPU checks, model caching, CLI test helpers
+
+**Key fixture scopes**:
+- `session`: Expensive setup reused across all tests (model downloads, GPU checks)
+- `function` (default): Fresh state for each test (temp databases, temp folders)
+
+## Environment Configuration
+
+**Model Caching:** Set `USE_CACHED_MODEL=true` (default) to use cached tiny Whisper model (~75MB) or `false` for mock-only mode (offline/faster).
+
+## Mocking Strategy
+
+| Component | Unit Tests | Integration Tests | E2E Tests |
+|-----------|-----------|-------------------|-----------|
+| **Model Loading** | ✅ Mock | ✅ Mock | ❌ Real |
+| **XLS Analysis Logic** | ✅ Mock | ❌ Real | ❌ Real |
+| **Database/File Operations** | ❌ Real (temp) | ❌ Real (temp) | ❌ Real |
+| **Network Calls** | ✅ Blocked | ✅ Mock | ❌ Real |
+
+## Test Markers
+
+Markers indicate cross-cutting concerns (use across all test folders):
+- `@pytest.mark.slow` - Tests >30s (model downloads, processing)
+- `@pytest.mark.network` - Requires internet (HuggingFace API)
+- `@pytest.mark.gpu` - Requires GPU/CUDA hardware
+- `@pytest.mark.docker` - Requires Docker daemon
+
+## GPU Testing
+
+GPU tests validate system setup (environment checks, not business logic):
+- NVIDIA drivers and CUDA/cuDNN libraries
+- ctranslate2 GPU device detection
+- faster-whisper model loading on GPU
+
+**Use for**: Server deployment validation, GPU setup troubleshooting  
+**Skip when**: CPU-only CI (auto-skips), rapid development, testing XLS analysis logic
+
+## Best Practices
+
+1. **Test Isolation**: Each test independent, no shared state
+2. **Fixture Scoping**: Session for expensive setup, function for fresh state
+3. **Offline Support**: Use `USE_CACHED_MODEL=false` or pre-download model
+4. **Performance**: Real models slower than mocks - choose appropriately
+
+---
+
+**Note**: This document provides a high-level overview for human readers. For detailed agent-focused tips and CI notes, see `docs/AI_instructions.md`.
