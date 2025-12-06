@@ -65,27 +65,23 @@ def normalize_events(raw_df: DataFrame, cleaner_team: str, source_file: str) -> 
         person_name_raw, door_name_raw, floor, wing, event_type, source_file
     """
     # Column mapping based on user specification:
-    # A = timestamp, C = event_type, H = door_name, AL = person_name
-    # Excel columns: A=0, C=2, H=7, AL=37
+    # A = timestamp, C = event_type, H = door_name, AL = person_name (primary)
+    # Additional person name fallbacks: AJ, AG, AB, AF
+    # Excel columns: A=0, C=2, H=7, AB=27, AF=31, AG=32, AJ=35, AL=37
     col_timestamp = 0  # Column A
     col_event_type = 2  # Column C
     col_door_name = 7  # Column H
     col_person_name = 37  # Column AL
+    col_person_name_fallbacks = [35, 32, 27, 31]  # AJ, AG, AB, AF
 
     # Get actual column names from DataFrame
     cols: list[Any] = raw_df.columns.tolist()
-    if len(cols) <= max(col_timestamp, col_event_type, col_door_name, col_person_name):
-        logger.warning(
-            "DataFrame has only %d columns; expected at least %d. Attempting to proceed.",
-            len(cols),
-            max(col_timestamp, col_event_type, col_door_name, col_person_name) + 1,
-        )
-
     # Use actual column names/indices
     timestamp_col = cols[col_timestamp] if col_timestamp < len(cols) else None
     event_type_col = cols[col_event_type] if col_event_type < len(cols) else None
     door_name_col = cols[col_door_name] if col_door_name < len(cols) else None
     person_name_col = cols[col_person_name] if col_person_name < len(cols) else None
+    person_name_fallback_cols = [cols[i] for i in col_person_name_fallbacks if i < len(cols)]
 
     # Filter: column C (event_type) non-empty
     if event_type_col is None:
@@ -113,7 +109,20 @@ def normalize_events(raw_df: DataFrame, cleaner_team: str, source_file: str) -> 
 
     # Parse timestamp
     if timestamp_col is not None:
-        df["timestamp"] = pd.to_datetime(df[timestamp_col], errors="coerce")
+        # Timestamps are provided as dd/mm/YYYY HH:MM:SS in the source files.
+        df["timestamp"] = pd.to_datetime(
+            df[timestamp_col],
+            format="%d/%m/%Y %H:%M:%S",
+            dayfirst=True,
+            errors="coerce",
+        )
+        # Fallback for any rows that do not match the expected format
+        needs_fallback = df["timestamp"].isna()
+        if needs_fallback.any():
+            df.loc[needs_fallback, "timestamp"] = pd.to_datetime(
+                df.loc[needs_fallback, timestamp_col],
+                errors="coerce",
+            )
     else:
         df["timestamp"] = pd.NaT
 
@@ -142,11 +151,15 @@ def normalize_events(raw_df: DataFrame, cleaner_team: str, source_file: str) -> 
             "source_file": source_file,
         }
 
-        # Person name (column AL)
-        if person_name_col is not None and person_name_col in row.index:
-            event["person_name_raw"] = row[person_name_col] if pd.notna(row[person_name_col]) else None
+        # Person name (column AL) with fallbacks (AJ, AG, AB, AF)
+        event["person_name_raw"] = None
+        if person_name_col is not None and person_name_col in row.index and pd.notna(row[person_name_col]):
+            event["person_name_raw"] = row[person_name_col]
         else:
-            event["person_name_raw"] = None
+            for col in person_name_fallback_cols:
+                if col in row.index and pd.notna(row[col]):
+                    event["person_name_raw"] = row[col]
+                    break
 
         # Door name (column H)
         if door_name_col is not None and door_name_col in row.index:
@@ -159,6 +172,10 @@ def normalize_events(raw_df: DataFrame, cleaner_team: str, source_file: str) -> 
             event["event_type"] = row[event_type_col] if pd.notna(row[event_type_col]) else None
         else:
             event["event_type"] = None
+
+        # Fallback: extract person name from event text if explicit columns are missing/empty
+        if event["person_name_raw"] in (None, "") and event["event_type"]:
+            event["person_name_raw"] = _extract_person_name_from_event_text(str(event["event_type"]))
 
         # Parse floor and wing from door_name_raw
         floor, wing = _parse_floor_wing(event["door_name_raw"])
@@ -225,6 +242,22 @@ def _parse_floor_wing(door_name: str | None) -> tuple[int | None, str | None]:
     return floor, wing
 
 
+def _extract_person_name_from_event_text(event_text: str | None) -> str | None:
+    """Extract a person name from the event description text.
+
+    Looks for the first single-quoted substring, matching formats like
+    "Access granted to 'Name' at ..." or "'Door' opened by 'Name'".
+    """
+    if not event_text:
+        return None
+
+    match = re.search(r"'([^']+)'", event_text)
+    if match:
+        return match.group(1).strip()
+
+    return None
+
+
 def build_presence_intervals(events_df: pd.DataFrame) -> pd.DataFrame:
     """Build presence intervals from normalized events.
 
@@ -244,14 +277,28 @@ def build_presence_intervals(events_df: pd.DataFrame) -> pd.DataFrame:
             columns=["cleaner_team", "date", "start_time", "end_time", "duration_minutes", "floor", "wing"]
         )
 
-    # Filter out events without floor/wing (can't attribute presence)
-    df = events_df[events_df["floor"].notna() & events_df["wing"].notna()].copy()
+    # Allow floor-only events. If a floor has known wings, map missing wings to the first wing seen for that floor.
+    # This keeps "turnikee/garage/etc." events by assigning them to a floor's primary wing when available.
+    wing_lookup = (
+        events_df[events_df["wing"].notna()][["floor", "wing"]]
+        .drop_duplicates()
+        .sort_values(["floor", "wing"])
+        .groupby("floor")["wing"]
+        .first()
+        .to_dict()
+    )
 
+    df = events_df[events_df["floor"].notna()].copy()
     if df.empty:
-        logger.warning("No events with valid floor/wing found")
+        logger.warning("No events with valid floor found")
         return pd.DataFrame(
             columns=["cleaner_team", "date", "start_time", "end_time", "duration_minutes", "floor", "wing"]
         )
+
+    # Fill missing wings using the first wing observed for the same floor, if any.
+    df["wing"] = df["wing"].fillna(df["floor"].map(wing_lookup))
+    # If a floor never has a wing, keep it as empty string for clean labels.
+    df["wing"] = df["wing"].fillna("")
 
     intervals = []
 
@@ -454,7 +501,7 @@ def create_heatmap(hourly_agg: pd.DataFrame, output_path: Path) -> None:
     pivot_data = hourly_agg.groupby(["hour", "floor", "wing"], as_index=False)["minutes_present"].sum().copy()
 
     # Create floor+wing label
-    pivot_data["floor_wing"] = pivot_data["floor"].astype(str) + pivot_data["wing"]
+    pivot_data["floor_wing"] = pivot_data["floor"].astype(str) + pivot_data["wing"].fillna("")
 
     # Pivot to create matrix: rows=floor_wing, cols=hour
     heatmap_matrix = pivot_data.pivot_table(
@@ -566,7 +613,8 @@ def create_team_comparison_charts(presence_df: pd.DataFrame, output_dir: Path) -
     ax.set_ylabel("Total Minutes")
     ax.set_title("Total Minutes Present per Day by Cleaner Team")
     ax.set_xticks([pos + width * len(teams) / 2 for pos in x])
-    ax.set_xticklabels([str(d) for d in dates], rotation=45, ha="right")
+    ax.set_xticklabels([str(d) for d in dates], rotation=45, ha="right", fontsize=8)
+    ax.tick_params(axis="x", labelsize=8)
     ax.legend()
     plt.tight_layout()
 

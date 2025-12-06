@@ -1,6 +1,7 @@
-import importlib
 import logging
 from pathlib import Path
+
+import backend.config as cfg
 
 
 def _clear_root():
@@ -21,35 +22,34 @@ def _console_handler() -> logging.Handler | None:
     return None
 
 
-def test_env_driven_log_level_on_init(monkeypatch):
-    import backend.config as cfg
-
+def _reset_logging_state():
     _clear_root()
-    # Set desired level via env and reload the module to re-init logging
+    cfg._logging_configured = False
+
+
+def test_env_driven_log_level_on_init(monkeypatch):
+    _reset_logging_state()
     monkeypatch.setenv("LOG_LEVEL", "DEBUG")
     monkeypatch.setattr(cfg.sys.stderr, "isatty", lambda: False, raising=False)
-    importlib.reload(cfg)
+    cfg.configure_logging(force=True)
     assert logging.getLogger().level == logging.DEBUG
     assert _console_handler().level == logging.DEBUG
 
     # Change env to WARNING and reload; levels should follow
-    _clear_root()
+    _reset_logging_state()
     monkeypatch.setenv("LOG_LEVEL", "WARNING")
-    importlib.reload(cfg)
+    cfg.configure_logging(force=True)
     assert logging.getLogger().level == logging.WARNING
     assert _console_handler().level == logging.WARNING
 
 
 def test_file_logging_creates_logfile(tmp_path, monkeypatch):
-    import backend.config as cfg
-
-    _clear_root()
-    importlib.reload(cfg)
+    _reset_logging_state()
     monkeypatch.setenv("APP_LOG_DIR", str(tmp_path))
     monkeypatch.setattr(cfg.sys.stderr, "isatty", lambda: False, raising=False)
 
-    # Reload again to pick up APP_LOG_DIR and emit a record
-    importlib.reload(cfg)
+    # Configure logging and emit a record
+    cfg.configure_logging(force=True)
     logging.getLogger("t").info("hello")
 
     # Expect rotated file handler targeting rag_system.log

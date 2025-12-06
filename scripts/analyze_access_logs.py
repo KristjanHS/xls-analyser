@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
 import logging
 import sys
 from pathlib import Path
@@ -20,6 +21,7 @@ import pandas as pd
 # Import analysis functions from backend
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from backend.access_control_overview_report import generate_access_control_overview
 from backend.access_control_analysis import (
     aggregate_daily_floor_wing,
     aggregate_hourly_floor_wing,
@@ -32,7 +34,7 @@ from backend.access_control_analysis import (
     load_excel_files,
     normalize_events,
 )
-from backend.config import setup_logging
+from backend.config import configure_logging
 
 logger = logging.getLogger(__name__)
 
@@ -89,13 +91,18 @@ def main() -> int:
 
     # Setup logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    setup_logging(level=log_level)
+    configure_logging(level=log_level)
+
+    run_id = datetime.now().strftime("%Y%m%dT%H%M%S")
+    run_dir = args.output / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("=" * 80)
     logger.info("Access Control Log Analysis Pipeline")
     logger.info("=" * 80)
     logger.info("Input folder: %s", args.input)
-    logger.info("Output folder: %s", args.output)
+    logger.info("Output base: %s", args.output)
+    logger.info("Run folder: %s", run_dir)
     logger.info("")
 
     try:
@@ -120,7 +127,7 @@ def main() -> int:
             logger.error("No events to process. Exiting.")
             return 1
 
-        save_dataframe(normalized_events_df, args.output, "normalized_events")
+        save_dataframe(normalized_events_df, run_dir, "normalized_events")
         logger.info("")
 
         # Step 3: Build presence intervals
@@ -132,7 +139,7 @@ def main() -> int:
             logger.error("No presence intervals generated. Exiting.")
             return 1
 
-        save_dataframe(presence_intervals_df, args.output, "presence_intervals")
+        save_dataframe(presence_intervals_df, run_dir, "presence_intervals")
         logger.info("")
 
         # Step 4: Generate aggregations
@@ -140,24 +147,24 @@ def main() -> int:
 
         logger.info("  Hourly by floor/wing/team...")
         hourly_agg = aggregate_hourly_floor_wing(presence_intervals_df)
-        save_dataframe(hourly_agg, args.output, "hourly_floor_wing")
+        save_dataframe(hourly_agg, run_dir, "hourly_floor_wing")
 
         logger.info("  Daily by floor/wing...")
         daily_agg = aggregate_daily_floor_wing(presence_intervals_df)
-        save_dataframe(daily_agg, args.output, "daily_floor_wing")
+        save_dataframe(daily_agg, run_dir, "daily_floor_wing")
 
         logger.info("  Per team/floor/wing...")
         team_agg = aggregate_per_team_floor_wing(presence_intervals_df)
-        save_dataframe(team_agg, args.output, "team_floor_wing")
+        save_dataframe(team_agg, run_dir, "team_floor_wing")
 
         logger.info("  Calculating re-entries...")
         reentries_df = calculate_reentries(presence_intervals_df)
-        save_dataframe(reentries_df, args.output, "reentries")
+        save_dataframe(reentries_df, run_dir, "reentries")
         logger.info("")
 
         # Step 5: Generate visualizations
         logger.info("Step 5: Generating visualizations...")
-        plots_dir = args.output / "plots"
+        plots_dir = run_dir
 
         if not hourly_agg.empty:
             logger.info("  Creating heatmap...")
@@ -172,7 +179,23 @@ def main() -> int:
 
         logger.info("")
 
-        # Step 6: Summary statistics
+        # Step 6: Build Ops Snapshot (HTML + PDF)
+        logger.info("Step 6: Building Ops Snapshot (HTML + PDF)...")
+        reports_dir = run_dir
+        generate_access_control_overview(
+            normalized_events_df=normalized_events_df,
+            presence_intervals_df=presence_intervals_df,
+            hourly_agg=hourly_agg,
+            daily_agg=daily_agg,
+            reentries_df=reentries_df,
+            plots_dir=plots_dir,
+            reports_dir=reports_dir,
+            input_dir=args.input,
+            output_dir=run_dir,
+        )
+        logger.info("")
+
+        # Step 7: Summary statistics
         logger.info("=" * 80)
         logger.info("Summary Statistics")
         logger.info("=" * 80)
@@ -183,7 +206,7 @@ def main() -> int:
         logger.info("Floors: %s", ", ".join(map(str, sorted(normalized_events_df["floor"].dropna().unique()))))
         logger.info("Total minutes tracked: %.2f", presence_intervals_df["duration_minutes"].sum())
         logger.info("")
-        logger.info("All outputs saved to: %s", args.output)
+        logger.info("All outputs saved to: %s", run_dir)
         logger.info("=" * 80)
 
         return 0

@@ -8,6 +8,8 @@
     "include": [
         "backend"
     ],
+    "venvPath": ".",
+    "venv": ".venv",
     "typeCheckingMode": "standard",
     "strict": [
         "backend/**"

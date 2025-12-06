@@ -15,8 +15,8 @@
 .PHONY: uv-sync-test pre-push
 
 # Use bash with strict flags for recipes
-SHELL := bash
-.SHELLFLAGS := -euo pipefail -c
+SHELL := /usr/bin/bash
+.SHELLFLAGS := --norc -euo pipefail -c
 
 # Stable project/session handling
 LOG_DIR := logs
